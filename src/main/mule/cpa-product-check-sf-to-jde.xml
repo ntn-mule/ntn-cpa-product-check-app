@@ -1,0 +1,189 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:email="http://www.mulesoft.org/schema/mule/email" xmlns:wsc="http://www.mulesoft.org/schema/mule/wsc"
+	xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/wsc http://www.mulesoft.org/schema/mule/wsc/current/mule-wsc.xsd
+http://www.mulesoft.org/schema/mule/email http://www.mulesoft.org/schema/mule/email/current/mule-email.xsd">
+	<flow name="cpa-product-check-sf-to-jdeFlow" doc:id="42394842-d1cc-420f-ad8b-648e152e8b56" >
+		<logger level="INFO" doc:name="Logger" doc:id="c21f1d82-66e2-4971-873f-55a2fc7c5724" message="#[payload]"/>
+		<choice doc:name="Choice" doc:id="6a007bdd-d809-4b23-ad29-095964979e75" >
+			<when expression='#[attributes.queryParams.Part_Number__c != null and attributes.queryParams."Account_JDE_Address__c" != null and  attributes.queryParams.Id != null]'>
+				<!-- [STUDIO:"Transform Message"]<ee:transform doc:name="Transform Message" doc:id="96cc4866-0527-4cf7-be8b-85bb21605b6e">
+			<ee:message>
+			</ee:message>
+			<ee:variables>
+				<ee:set-variable variableName="request"><![CDATA[%dw 2.0
+output text/plain
+&#45;&#45;-
+p('paURL') ++"?PartId=" ++ attributes.queryParams.Part_Number__c ++ "&Qty=0&ShipTo=" ++ attributes.queryParams."Account_JDE_Address__c" ++ "&SFID=" ++ attributes.queryParams.Id
+
+&#93;&#93;></ee:set-variable>
+			</ee:variables>
+		</ee:transform> [STUDIO] -->
+				<ee:transform doc:name="consumer request" doc:id="6fa4a70b-2e0c-49ec-baad-5382d76be840">
+					<ee:message>
+						<ee:set-payload><![CDATA[%dw 2.0
+ns soapenv http://schemas.xmlsoap.org/soap/envelope/
+ns ntn http://ntnusa.e1.bssv.JP57CPQ1/
+output application/xml
+---
+{
+	soapenv#Envelope: {
+		soapenv#Header: {
+		},
+		soapenv#Body: {
+			ntn#getPartsDetail: {
+				parts:{
+					part:  attributes.queryParams.Part_Number__c,
+					requestQuantity: 0,
+				    shipTo: attributes.queryParams."Account_JDE_Address__c"
+			
+				}
+				
+				}
+		}
+	}
+}]]></ee:set-payload>
+					</ee:message>
+				</ee:transform>
+				<try doc:name="Try" doc:id="ffe2d48d-8039-49d5-af83-6b2ceab914de">
+					<wsc:consume operation="getPartsDetail" doc:name="business function call" doc:id="8cd94e4c-b613-431c-80a2-bd3dc3dd45a9" config-ref="Web_Service_Consumer_Config" target="consumerResponse" />
+					<logger level="INFO" doc:name="after business function call" doc:id="b45bc7c4-5508-4fb8-b992-4bf0b2acd69d" message="#[%dw 2.0&#10;output application/json&#10;---&#10;vars.consumerResponse]" />
+					<ee:transform doc:name="response" doc:id="fd0c5ed6-5867-4b2d-bb37-ed549be285de">
+						<ee:message>
+							<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+var branchQuantitiesArray = vars.consumerResponse.body.getPartsDetailResponse.partDetails.*"branchQuantities" 
+var partDetails = vars.consumerResponse.body.getPartsDetailResponse.partDetails - "branchQuantities"
+var excessFileds = vars.consumerResponse.body.getPartsDetailResponse - "partDetails"      
+---
+{
+    "responseDetailParts" : excessFileds ++ {
+         
+        "partDetails" : [partDetails ++ "branchQuantities": branchQuantitiesArray],
+         
+        }
+    
+}
+]]></ee:set-payload>
+						</ee:message>
+					</ee:transform>
+					<logger level="INFO" doc:name=" Response logger" doc:id="5802841d-2787-4d01-ac92-222d463ae1f6" message="#[payload]" />
+					<error-handler>
+						<on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="cc09965d-d755-4c0c-aa5b-9673d1499276" type="ANY">
+							<ee:transform doc:name="Transform Message" doc:id="5ff49992-bdf8-487a-8fcd-023b49230399">
+								<ee:message>
+									<ee:set-payload><![CDATA[%dw 2.0
+output application/java
+---
+error.exception.detailMessage]]></ee:set-payload>
+								</ee:message>
+							</ee:transform>
+							<email:send doc:name="Send" doc:id="7449ccda-2e8d-45de-9d89-bae0d39be382" config-ref="Email_SMTP" subject="#[&quot;*** E-mail Notification: &quot; ++ p('app.env') ++ &quot; Kind Attention *** Error Alert in  &quot; ++ p('app.name')]" toAddresses="#[p('smtp.to') splitBy &quot;,&quot;]" fromAddress="${secure::smtp.user}">
+								<email:body contentType="text/html" encoding="UTF-8">
+									<email:content><![CDATA[#[%dw 2.0
+output application/xml
+skipNullOn="everywhere"
+
+---
+{
+    "html":{
+        "body":{
+            "div" @(class:"total"):{
+                "div" @(class:"header"):{
+                    "h2":"Alert from Mulesoft"
+                },
+                "div" @(class:"content"):{
+                    "p": "Hi,",
+                    "p": "Greetings!!!",
+					"p": "Error while processing, please take corrective action."
+                },
+
+                "div":{
+                    "table" @(width:'40%', border:'1', cellspacing:'0'): {
+							"tr":{
+                                "th": "InterfaceName",
+                                "td": p('app.name')
+                            },
+                          "tr":{
+                                "th": "Error Type",
+                                "td": error.errorType.asString
+                            },
+                          "tr":{
+                                "th": "Error Message",
+                                "td": payload
+                            }
+                                                     
+				
+                        }
+                }
+            }
+        }
+    }
+}]]]></email:content>
+								</email:body>
+							</email:send>
+							<ee:transform doc:name="error response" doc:id="4d561b1a-3d09-4a44-aed8-6a36558bb643">
+								<ee:message>
+									<ee:set-payload><![CDATA[%dw 2.0
+output application/xml
+ns soapenv http://schemas.xmlsoap.org/soap/envelope/
+ns sforce http://soap.sforce.com/2005/09/outbound
+
+---
+{
+  'soapenv:Envelope' @('xmlns:soapenv': "http://schemas.xmlsoap.org/soap/envelope/"): {
+    'soapenv:Body': {
+      'notificationsResponse' @('xmlns': "http://soap.sforce.com/2005/09/outbound"): {
+        Ack: "false"
+      }
+    }
+  }
+}
+]]></ee:set-payload>
+								</ee:message>
+							</ee:transform>
+							<logger level="INFO" doc:name="Logger" doc:id="953b08ba-3be5-4956-8645-250a8190c9c2" message="#[payload]" />
+						</on-error-propagate>
+					</error-handler>
+				</try>
+				<!-- [STUDIO:"Try"]<try doc:name="Try" doc:id="3eb0f11e-e5dc-414d-9b2e-96f76f797e35" >
+					<http:request method="GET" doc:name="Request" doc:id="f09bd3f2-282a-43ab-940a-8dbf32b812e2" url="#[vars.request&#93;" />
+					<error-handler >
+						<on-error-propagate enableNotifications="true" logException="true" doc:name="On Error Propagate" doc:id="94c68653-946f-4eba-874a-af3f453f0009" type="ANY">
+							<ee:transform doc:name="Transform Message" doc:id="a1eb07f5-6d45-43cd-80fe-624e3de84ec9" >
+								<ee:message >
+									<ee:set-payload ><![CDATA[error.errorType.asString&#93;&#93;></ee:set-payload>
+								</ee:message>
+							</ee:transform>
+						</on-error-propagate>
+					</error-handler>
+				</try> [STUDIO] -->
+				<ee:transform doc:name="Transform Message" doc:id="5900cc0b-9a1f-4d4f-925d-aa1769729d38">
+			<ee:message>
+				<ee:set-payload><![CDATA[%dw 2.0
+output application/json
+---
+{
+  "responseDetailParts": {
+  	"partDetails":{
+  		priceMethodGroup : payload.responseDetailParts.partDetails.priceMethodGroup
+  	}
+
+  },
+  "message": "",
+  "returnCode": "OK"
+}]]></ee:set-payload>
+			</ee:message>
+		</ee:transform>
+				<logger level="INFO" doc:name="Logger" doc:id="b9c543e1-5878-443f-9ee3-8e9eae13277a" message="#[payload]" />
+			</when>
+			<otherwise >
+				<logger level="INFO" doc:name="Logger" doc:id="37678631-72c8-43d0-9653-6d7190dfe620" message='#["Invalid request"]'/>
+			</otherwise>
+		</choice>
+	</flow>
+</mule>
